@@ -1,0 +1,3 @@
+const $=id=>document.getElementById(id);
+chrome.storage.local.get(['token','browser']).then(config=>{$('token').value=config.token||'';$('browser').value=config.browser||(navigator.userAgent.includes('Edg/')?'edge':'chrome');});
+$('connection').onsubmit=async event=>{event.preventDefault();$('status').textContent='Connecting…';try{await chrome.storage.local.set({token:$('token').value.trim(),browser:$('browser').value});const result=await chrome.runtime.sendMessage({type:'test'});$('status').textContent=result.ok?'Connected. Active tabs will now appear in your dashboard.':result.error;}catch{$('status').textContent='Could not connect. Check that the recorder is running and try again.';}};

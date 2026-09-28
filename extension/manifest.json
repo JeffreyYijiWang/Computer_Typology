@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Computer Typology · Active Tab",
+  "description": "Send the focused tab title and website domain to your own local activity tracker.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:43128/*"],
+  "background": {"service_worker": "background.js"},
+  "options_page": "options.html",
+  "action": {"default_title": "Computer Typology: connection settings"},
+  "incognito": "not_allowed"
+}
