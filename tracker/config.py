@@ -19,6 +19,8 @@ def load_config(data_dir=DATA_DIR):
         "token": secrets.token_urlsafe(32),
         "idle_seconds": 300,
         "poll_seconds": 1,
+        "checkpoint_seconds": 60,
+        "sync_time": "23:55",
         "paused": False,
         "excluded_apps": [],
         "excluded_domains": [],

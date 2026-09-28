@@ -4,8 +4,8 @@
   "Parameters": {
     "PostgreSQLVersion": {
       "Type": "String",
-      "Description": "Available PostgreSQL 17 minor version, resolved automatically by deploy_aws.py",
-      "AllowedPattern": "^17\\.[0-9]+$"
+      "Description": "Available PostgreSQL 18 minor version, resolved automatically by deploy_aws.py",
+      "AllowedPattern": "^18\\.[0-9]+$"
     },
     "AllowedClientCidr": {
       "Type": "String",
@@ -36,10 +36,26 @@
             }
           }
         ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "Gateway": {
-      "Type": "AWS::EC2::InternetGateway"
+      "Type": "AWS::EC2::InternetGateway",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
+      }
     },
     "GatewayAttachment": {
       "Type": "AWS::EC2::VPCGatewayAttachment",
@@ -49,6 +65,14 @@
         },
         "InternetGatewayId": {
           "Ref": "Gateway"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
         }
       }
     },
@@ -65,6 +89,14 @@
             {
               "Fn::GetAZs": ""
             }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
           ]
         }
       }
@@ -84,6 +116,14 @@
             }
           ]
         }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "RouteTable": {
@@ -91,6 +131,14 @@
       "Properties": {
         "VpcId": {
           "Ref": "Vpc"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
         }
       }
     },
@@ -105,6 +153,14 @@
         "GatewayId": {
           "Ref": "Gateway"
         }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "RouteA": {
@@ -115,6 +171,14 @@
         },
         "RouteTableId": {
           "Ref": "RouteTable"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
         }
       }
     },
@@ -127,12 +191,20 @@
         "RouteTableId": {
           "Ref": "RouteTable"
         }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "SecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "PostgreSQL from the owner's current public IP only",
+        "GroupDescription": "PostgreSQL from one approved public IP only",
         "VpcId": {
           "Ref": "Vpc"
         },
@@ -146,6 +218,14 @@
             }
           }
         ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "SubnetGroup": {
@@ -160,15 +240,31 @@
             "Ref": "SubnetB"
           }
         ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     },
     "Parameters": {
       "Type": "AWS::RDS::DBParameterGroup",
       "Properties": {
         "Description": "Require TLS for every PostgreSQL connection",
-        "Family": "postgres17",
+        "Family": "postgres18",
         "Parameters": {
           "rds.force_ssl": "1"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
         }
       }
     },
@@ -177,13 +273,16 @@
       "DependsOn": [
         "InternetRoute",
         "RouteA",
-        "RouteB"
+        "RouteB",
+        "DatabaseLogs"
       ],
       "DeletionPolicy": "Snapshot",
       "UpdateReplacePolicy": "Snapshot",
       "Properties": {
         "Engine": "postgres",
-        "EngineVersion": {"Ref": "PostgreSQLVersion"},
+        "EngineVersion": {
+          "Ref": "PostgreSQLVersion"
+        },
         "DBInstanceClass": {
           "Ref": "DatabaseInstanceClass"
         },
@@ -210,7 +309,7 @@
         },
         "PubliclyAccessible": true,
         "MultiAZ": false,
-        "BackupRetentionPeriod": 7,
+        "BackupRetentionPeriod": 1,
         "DeletionProtection": true,
         "AutoMinorVersionUpgrade": true,
         "CopyTagsToSnapshot": true,
@@ -221,8 +320,46 @@
           {
             "Key": "Application",
             "Value": "ComputerTypology"
+          },
+          {
+            "Key": "created_by",
+            "Value": "rds-oss-skill"
+          },
+          {
+            "Key": "generation_model",
+            "Value": "gpt-6"
           }
-        ]
+        ],
+        "DBInstanceIdentifier": {
+          "Fn::Sub": "${AWS::StackName}-db"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Small single-user daily uploads; Single AZ minimizes the fixed monthly bill.",
+          "must": [
+            "Encrypted storage and verified TLS.",
+            "Preserve deletion protection, one-day backups and replacement snapshots; longer backups require an account plan that allows them.",
+            "20 GB gp3 and db.t4g.micro by default; no storage autoscaling."
+          ]
+        }
+      }
+    },
+    "DatabaseLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/rds/instance/${AWS::StackName}-db/postgresql"
+        },
+        "RetentionInDays": 7
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Support a personal daily activity archive with direct TLS connections and no NAT gateway.",
+          "must": [
+            "Keep database access restricted to the approved client IPv4 /32."
+          ]
+        }
       }
     }
   },
@@ -263,6 +400,11 @@
       "Value": {
         "Ref": "SecurityGroup"
       }
+    }
+  },
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
     }
   }
 }

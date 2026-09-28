@@ -34,7 +34,7 @@ def main():
     tabs, stop = TabCache(), threading.Event()
     engine = Engine(store, config, tabs)
     collector = WindowsCollector(DATA_DIR / "icons")
-    sync = SyncWorker(store, DATA_DIR, stop)
+    sync = SyncWorker(store, DATA_DIR, stop, config, engine.flush)
     try:
         server = Server(engine, store, tabs, config, sync, DATA_DIR)
     except OSError:
@@ -76,6 +76,7 @@ def main():
         tray.run()
     finally:
         stop.set()
+        sync.wake.set()
         server.shutdown()
         server.server_close()
         workers[1].join(timeout=5)

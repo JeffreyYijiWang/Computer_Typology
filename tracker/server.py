@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .config import APP_DIR, PORT, save_config
+from .engine import clean_domain
 
 
 class Server(ThreadingHTTPServer):
@@ -84,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.engine.flush()
                 return self.reply(200, {**self.server.engine.status(), "sync": {
                     "state": self.server.sync.state, "last_success": self.server.sync.last_success,
-                    "pending": self.server.store.pending_count()}, "username": self.server.store.username})
+                    "pending": self.server.store.pending_count(), "daily_time": self.server.config.get("sync_time", "23:55")}, "username": self.server.store.username})
             if path.path == "/api/settings":
                 return self.reply(200, {**self.server.config, "extension_path": str(APP_DIR / "extension"), "data_path": str(self.server.data_dir)})
             if path.path in ("/api/activity", "/api/export"):
@@ -97,7 +98,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path.path == "/api/export":
                     if query.get("format", ["json"])[0] == "csv":
                         buffer = io.StringIO(newline="")
-                        fields = ("id", "device_id", "username", "app_name", "process_name", "window_title", "browser", "tab_title", "domain", "started_at", "ended_at", "duration_seconds")
+                        fields = ("id", "device_id", "username", "app_name", "process_name", "window_title", "browser", "tab_title", "domain", "favicon_key", "started_at", "ended_at", "duration_seconds")
                         writer = csv.DictWriter(buffer, fields, extrasaction="ignore")
                         writer.writeheader()
                         for row in rows:
@@ -111,6 +112,11 @@ class Handler(BaseHTTPRequestHandler):
                     item = totals.setdefault(key, {"app_name": row["app_name"], "icon_key": row["icon_key"], "seconds": 0})
                     item["seconds"] += row["duration_seconds"]
                 return self.reply(200, {"intervals": rows, "apps": sorted(totals.values(), key=lambda x: -x["seconds"]), "total_seconds": sum(r["duration_seconds"] for r in rows)})
+            if re.fullmatch(r"/favicons/[a-f0-9]{64}\.png", path.path):
+                data = self.server.store.favicon(path.path.rsplit("/", 1)[-1][:-4])
+                if data:
+                    return self.reply(200, data, "image/png")
+                return self.reply(404, {"error": "Icon not found"})
             if re.fullmatch(r"/icons/[a-f0-9]{24}\.png", path.path):
                 target = self.server.data_dir / "icons" / path.path.rsplit("/", 1)[-1]
                 if target.is_file():
@@ -128,22 +134,43 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": str(error)})
 
     def do_POST(self):
+        # Consume a bounded request body before rejecting authentication. Closing
+        # with unread bytes can reset TCP on Windows and discard the 401 reply.
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= 32768:
+                return self.reply(400, {"error": "Invalid request size"})
+            raw = self.rfile.read(length)
+        except (ValueError, OSError):
+            return self.reply(400, {"error": "Invalid request body"})
         if not self.guard():
             return
         if not self.authorized():
             return self.reply(401, {"error": "Pairing token required"})
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= 16384:
-                raise ValueError("Invalid request size")
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 raise ValueError("Expected JSON")
-            payload = json.loads(self.rfile.read(length))
+            payload = json.loads(raw)
             if not isinstance(payload, dict):
                 raise ValueError("Expected an object")
             if self.path == "/api/tab":
+                # Never accept an arbitrary asset ID or fetch a caller's URL.
+                payload.pop("favicon_key", None)
+                if not isinstance(payload.get("url", ""), str):
+                    raise ValueError("Expected a URL string")
+                domain = clean_domain(payload.get("url", ""))
+                excluded = any(domain == d or (domain or "").endswith("." + d) for d in self.server.config["excluded_domains"])
+                executable = {"chrome": "chrome.exe", "edge": "msedge.exe"}.get(payload.get("browser"))
+                excluded = excluded or executable in self.server.config["excluded_apps"]
+                if payload.get("favicon_png") and domain and payload.get("focused") is True and not payload.get("private") and not self.server.config["paused"] and not excluded:
+                    payload["favicon_key"] = self.server.store.save_favicon(payload["favicon_png"])
                 self.server.tabs.update(payload)
                 return self.reply(200, {"ok": True})
+            if self.path == "/api/sync":
+                if self.headers.get("Origin", "").startswith("chrome-extension://"):
+                    return self.reply(403, {"error": "Use the dashboard to upload"})
+                self.server.sync.request()
+                return self.reply(200, {"ok": True, "state": "Upload requested"})
             if self.path == "/api/settings":
                 if self.headers.get("Origin", "").startswith("chrome-extension://"):
                     return self.reply(403, {"error": "Use the dashboard to change settings"})
@@ -152,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
                     if key in ("paused", "capture_window_titles") and isinstance(value, bool):
                         updated[key] = value
                     elif key == "idle_seconds" and type(value) is int and 30 <= value <= 3600:
+                        updated[key] = value
+                    elif key == "sync_time" and isinstance(value, str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
                         updated[key] = value
                     elif key in ("excluded_apps", "excluded_domains") and isinstance(value, list) and len(value) <= 100 and all(isinstance(v, str) and len(v) <= 253 for v in value):
                         updated[key] = sorted(set(v.strip().lower() for v in value if v.strip()))

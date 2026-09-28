@@ -1,0 +1,15 @@
+let databases = Resources.*[ Type == 'AWS::RDS::DBInstance' ]
+rule database_safety when %databases !empty {
+    %databases.Properties.StorageEncrypted == true
+    %databases.Properties.DeletionProtection == true
+    %databases.Properties.ManageMasterUserPassword == true
+    %databases.Properties.BackupRetentionPeriod >= 1
+    %databases.DeletionPolicy == 'Snapshot'
+    %databases.UpdateReplacePolicy == 'Snapshot'
+}
+rule scoped_ingress {
+    Resources.SecurityGroup.Properties.SecurityGroupIngress[*].CidrIp.Ref == 'AllowedClientCidr'
+    Resources.SecurityGroup.Properties.SecurityGroupIngress[*].FromPort == 5432
+    Resources.SecurityGroup.Properties.SecurityGroupIngress[*].ToPort == 5432
+    Resources.Parameters.Properties.Parameters.'rds.force_ssl' == '1'
+}

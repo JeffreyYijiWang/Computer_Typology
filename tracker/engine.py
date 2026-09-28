@@ -37,6 +37,7 @@ class TabCache:
                 "private": payload.get("private") is True,
                 "title": title,
                 "domain": clean_domain(url),
+                "favicon_key": payload.get("favicon_key"),
             }
 
     def match(self, browser, window_title, now):
@@ -95,14 +96,14 @@ class Engine:
             else:
                 activity = {k: snapshot[k] for k in ("app_name", "process_name", "icon_key", "window_title")}
                 browser = BROWSERS.get(activity["process_name"].lower())
-                activity.update(browser=browser, tab_title=None, domain=None)
+                activity.update(browser=browser, tab_title=None, domain=None, favicon_key=None)
                 entry = self.tabs.match(browser, activity["window_title"], now) if browser else None
                 # Browsers expose private mode in their title even without an extension.
                 private_title = browser and any(label in activity["window_title"].lower() for label in ("inprivate", "incognito", "private browsing"))
                 if private_title or (entry and entry["private"]):
                     activity, self.state = None, "Private browsing"
                 elif entry:
-                    activity.update(tab_title=entry["title"], domain=entry["domain"])
+                    activity.update(tab_title=entry["title"], domain=entry["domain"], favicon_key=entry.get("favicon_key"))
                     if any(entry["domain"] == d or (entry["domain"] or "").endswith("." + d) for d in self.config["excluded_domains"]):
                         activity, self.state = None, "Excluded website"
                 elif browser and self.config["excluded_domains"]:
@@ -123,13 +124,13 @@ class Engine:
                     self.interval_id = self.store.begin(activity, now)
                     self.current = {**activity, "key": key, "since": now}
                     self.last_flush = now
-            elif self.current and now - self.last_flush >= 5:
+            elif self.current and now - self.last_flush >= self.config.get("checkpoint_seconds", 60):
                 self.store.extend(self.interval_id, now)
                 self.last_flush = now
 
     def status(self):
         with self.lock:
-            return {"state": self.state, "current": {k: v for k, v in self.current.items() if k != "key"} if self.current else None}
+            return {"state": self.state, "paused": self.config["paused"], "current": {k: v for k, v in self.current.items() if k != "key"} if self.current else None}
 
     def pause(self, value):
         with self.lock:
@@ -137,6 +138,8 @@ class Engine:
             if value:
                 self.close_interval(time.time())
                 self.state = "Paused"
+            else:
+                self.state = "Starting"
 
     def flush(self):
         with self.lock:

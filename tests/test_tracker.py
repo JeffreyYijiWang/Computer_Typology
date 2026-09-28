@@ -1,4 +1,6 @@
 import json
+import base64
+import io
 import tempfile
 import threading
 import unittest
@@ -202,6 +204,26 @@ class ApiTests(TrackerFixture):
         self.assertEqual(self.tabs.entries["edge"]["domain"], "example.com")
         self.assertEqual(self.request("/")[0], 200)
         self.assertIn("text/javascript", self.request("/app.js")[2]["Content-Type"])
+
+    def test_icon_ingest_respects_pause_exclusions_and_image_validation(self):
+        from PIL import Image
+        output = io.BytesIO()
+        Image.new('RGBA', (32, 32), 'green').save(output, format='PNG')
+        payload = dict(browser='edge', focused=True, title='Page', url='https://example.com', favicon_png=base64.b64encode(output.getvalue()).decode())
+        headers = {'Authorization':'Bearer '+self.config['token']}
+        self.config['paused'] = True
+        self.assertEqual(self.request('/api/tab', payload, headers)[0],200)
+        self.assertEqual(self.store.pending_favicons(),[])
+        self.config['paused'] = False
+        self.config['excluded_apps'] = ['msedge.exe']
+        self.assertEqual(self.request('/api/tab', payload, headers)[0],200)
+        self.assertEqual(self.store.pending_favicons(),[])
+        self.config['excluded_apps'] = []
+        self.assertEqual(self.request('/api/tab', payload, headers)[0],200)
+        key=self.tabs.entries['edge']['favicon_key']
+        self.assertEqual(self.request('/favicons/'+key+'.png')[1],output.getvalue())
+        payload['url'] = []
+        self.assertEqual(self.request('/api/tab',payload,headers)[0],400)
 
 
 if __name__ == "__main__":

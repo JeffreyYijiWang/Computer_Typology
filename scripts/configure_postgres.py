@@ -39,7 +39,7 @@ def main():
             db.execute(DDL)
         db.execute("SELECT id FROM activity_intervals LIMIT 0")
     save_connection(connection)
-    print("Connection verified and saved. The password is protected with Windows DPAPI. Sync starts within five minutes.")
+    print("Connection verified and saved. The password is protected with Windows DPAPI. The recorder catches up within one minute, then uploads daily.")
 
 
 if __name__ == "__main__":

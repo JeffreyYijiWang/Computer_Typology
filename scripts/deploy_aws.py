@@ -6,18 +6,15 @@ AWS CLI performs authentication using the chosen local profile.
 import argparse
 import ipaddress
 import json
-import secrets
+import os
 import ssl
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tracker.config import DATA_DIR
-from tracker.sync import DDL
-from configure_postgres import save_connection
 
 
 def main():
@@ -38,12 +35,13 @@ def main():
     aws_ca = DATA_DIR / "aws-cli-ca.pem"
     aws_ca.write_text("".join(ssl.DER_cert_to_PEM_cert(c) for c in ssl.create_default_context().get_ca_certs(binary_form=True)), encoding="ascii")
 
+    child_env = os.environ.copy()
+    child_env.update(AWS_PROFILE=args.profile, AWS_REGION=args.region, AWS_CA_BUNDLE=str(aws_ca), SSL_CERT_FILE=str(aws_ca))
+
     def aws(*arguments):
         command = ["aws", "--profile", args.profile, "--region", args.region, "--ca-bundle", str(aws_ca), "--output", "json", "--no-cli-pager", *arguments]
-        result = subprocess.run(command, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        result = subprocess.run(command, capture_output=True, text=True, env=child_env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if result.returncode:
-            # AWS errors here carry no secret payload; never print stdout from a
-            # get-secret-value call or a connection's parameters.
             raise RuntimeError(result.stderr.strip())
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
@@ -55,9 +53,9 @@ def main():
         return
     if not args.connect_existing:
         versions = aws("rds", "describe-db-engine-versions", "--engine", "postgres")["DBEngineVersions"]
-        supported = [v["EngineVersion"] for v in versions if v.get("DBParameterGroupFamily") == "postgres17" and v.get("Status") == "available"]
+        supported = [v["EngineVersion"] for v in versions if v.get("DBParameterGroupFamily") == "postgres18" and v.get("Status") == "available"]
         if not supported:
-            raise RuntimeError("No available PostgreSQL 17 version was returned for this region")
+            raise RuntimeError("No available PostgreSQL 18 version was returned for this region")
         version = max(supported, key=lambda value: tuple(int(part) for part in value.split('.')))
         orderable = aws("rds", "describe-orderable-db-instance-options", "--engine", "postgres", "--engine-version", version, "--db-instance-class", "db.t4g.micro")
         if not orderable["OrderableDBInstanceOptions"]:
@@ -80,27 +78,18 @@ def main():
             raise RuntimeError("Timed out waiting for AWS. Resources may still be provisioning; inspect the stack, then use --connect-existing.")
     stack = aws("cloudformation", "describe-stacks", "--stack-name", args.stack)["Stacks"][0]
     outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
-    secret = json.loads(aws("secretsmanager", "get-secret-value", "--secret-id", outputs["MasterSecretArn"])["SecretString"])
-    ca = DATA_DIR / "rds-ca.pem"
-    with urllib.request.urlopen("https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem", timeout=30) as response:
-        ca.write_bytes(response.read())
-    import psycopg
-    from psycopg import sql
-    connection = dict(host=outputs["Endpoint"], port=int(outputs["Port"]), dbname=outputs["DatabaseName"], user=secret["username"], password=secret["password"], sslmode="verify-full", sslrootcert=str(ca), connect_timeout=15)
-    password = secrets.token_urlsafe(40)
-    with psycopg.connect(**connection) as db:
-        db.execute(DDL)
-        exists = db.execute("SELECT 1 FROM pg_roles WHERE rolname='typology_writer'").fetchone()
-        command = "ALTER ROLE" if exists else "CREATE ROLE"
-        db.execute(sql.SQL(command + " typology_writer LOGIN PASSWORD {}").format(sql.Literal(password)))
-        db.execute("GRANT CONNECT ON DATABASE typology TO typology_writer")
-        db.execute("GRANT USAGE ON SCHEMA public TO typology_writer")
-        db.execute("GRANT SELECT, INSERT, UPDATE ON activity_intervals TO typology_writer")
-    connection.update(user="typology_writer", password=password)
-    with psycopg.connect(**connection) as db:
-        db.execute("SELECT id FROM activity_intervals LIMIT 0")
-    save_connection(connection)
-    print("PostgreSQL is ready. Saved an encrypted password for the restricted sync role. The recorder will connect within five minutes.")
+    secret_arn = outputs["MasterSecretArn"]
+    child_env["TYPOLOGY_ADMIN_USER"] = "typology_admin"  # Public template parameter, not a secret.
+    child_env["TYPOLOGY_ADMIN_PASSWORD"] = "{{resolve:secretsmanager:" + secret_arn + ":SecretString:password}}"
+    child_env["ASM_EXEC_MCP_TIMEOUT"] = "60"
+    scripts = Path(__file__).resolve().parent
+    result = subprocess.run([sys.executable, str(scripts / "vendor" / "asm-exec"), "--",
+                             sys.executable, str(scripts / "bootstrap_postgres.py"),
+                             "--host", outputs["Endpoint"], "--port", outputs["Port"],
+                             "--database", outputs["DatabaseName"]], env=child_env)
+    if result.returncode:
+        raise RuntimeError("Database bootstrap did not complete. The AWS stack is preserved; retry with --connect-existing.")
+    print("PostgreSQL is ready. The recorder catches up within one minute, then uploads daily.")
     print("If your public IP changes, update AllowedClientCidr on the CloudFormation stack before reconnecting.")
 
 
